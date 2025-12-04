@@ -55,22 +55,24 @@ export async function POST(request: NextRequest) {
         createdAt: new Date(),
       };
 
-      let result;
+      let conversationId: string | undefined;
       if (existingConversation) {
         // Update existing conversation
-        result = await conversationsCollection.updateOne(
+        await conversationsCollection.updateOne(
           { callId },
           { $set: conversationData }
         );
+        conversationId = existingConversation._id?.toString();
       } else {
         // Insert new conversation
-        result = await conversationsCollection.insertOne(conversationData);
+        const result = await conversationsCollection.insertOne(conversationData);
+        conversationId = result.insertedId.toString();
       }
 
       return NextResponse.json({
         success: true,
         message: "Conversation saved successfully",
-        conversationId: result.insertedId?.toString() || existingConversation?._id?.toString(),
+        conversationId: conversationId,
       });
     } catch (dbError: any) {
       console.error("Database error saving conversation:", dbError);
