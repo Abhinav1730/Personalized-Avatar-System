@@ -6,10 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
-    "test:db": "node test-mongodb-integration.js",
-    "test:db:keep": "node test-mongodb-integration.js --keep-data",
-    "test:db:direct": "node test-db-direct.js"
+    "lint": "eslint"
   },
   "dependencies": {
     "@vapi-ai/web": "^2.5.1",
