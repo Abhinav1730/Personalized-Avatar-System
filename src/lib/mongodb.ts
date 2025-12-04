@@ -77,6 +77,7 @@ export async function getClient(): Promise<MongoClient> {
   return getClientPromise();
 }
 
-// Export clientPromise for backward compatibility (lazy initialization)
-export default getClientPromise();
+// Export getClientPromise function for backward compatibility (lazy initialization)
+// Note: Do not call it here to avoid build-time execution
+export default getClientPromise;
 
