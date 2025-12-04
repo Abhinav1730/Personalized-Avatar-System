@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getDatabase } from "@/lib/mongodb";
+import { BoldsignContract } from "@/models/BoldsignContract";
 
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { email, name } = body;
+    const { email, name, callId, sessionId } = body;
 
     if (!email) {
       return NextResponse.json(
@@ -158,12 +160,58 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const expiresIn = signLinkData.expiresIn || 3600;
+    const expiresAt = new Date(Date.now() + expiresIn * 1000);
+
+    // Save contract data to MongoDB
+    let contractId: string | null = null;
+    try {
+      const db = await getDatabase();
+      const contractsCollection = db.collection<BoldsignContract>("boldsignContracts");
+
+      const contractData: BoldsignContract = {
+        email,
+        name: name || email.split("@")[0],
+        documentId,
+        signingLink,
+        status: "pending",
+        createdAt: new Date(),
+        expiresAt,
+        metadata: {
+          sessionId: sessionId || undefined,
+          callId: callId || undefined,
+          redirectUrl,
+          expiresIn,
+        },
+      };
+
+      const insertResult = await contractsCollection.insertOne(contractData);
+      contractId = insertResult.insertedId.toString();
+    } catch (dbError: any) {
+      // Log error but don't fail the request - contract creation was successful
+      console.error("Failed to save contract to database:", dbError);
+      // Return retry data in response so frontend can handle it
+    }
+
     return NextResponse.json({
       success: true,
       signingLink,
       documentId,
-      expiresIn: signLinkData.expiresIn || 3600,
+      contractId,
+      expiresIn,
       message: "Signing link created successfully",
+      // Include retry data if DB save failed
+      dbSaveFailed: !contractId,
+      retryData: !contractId ? {
+        email,
+        name: name || email.split("@")[0],
+        documentId,
+        signingLink,
+        callId,
+        sessionId,
+        expiresAt: expiresAt.toISOString(),
+        expiresIn,
+      } : undefined,
     });
   } catch (error: any) {
     console.error("Error creating signing link:", error);
