@@ -1222,6 +1222,25 @@ Keep responses conversational, technical, and focused on helping users understan
 
   return (
     <div className="flex justify-center items-center min-h-screen p-4 gradient-bg">
+      {/* Full-screen overlay for avatar initialization */}
+      {isInitializing && avatarState === "idle" && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md">
+          <div className="flex flex-col items-center gap-6 p-8 glass rounded-2xl border border-white/20 max-w-sm mx-4 animate-fade-in">
+            <div className="relative">
+              <div className="absolute inset-0 bg-gradient-to-r from-purple-500 via-blue-500 to-purple-500 rounded-full blur-2xl opacity-60 animate-pulse"></div>
+              <Loader2 className="h-16 w-16 animate-spin text-white relative z-10" />
+            </div>
+            <div className="text-center">
+              <p className="text-xl font-semibold text-white mb-2">Initializing Avatar</p>
+              <p className="text-sm text-gray-300">Setting up your AI assistant...</p>
+            </div>
+            <div className="w-full bg-gray-700/30 rounded-full h-2 overflow-hidden">
+              <div className="h-full bg-gradient-to-r from-purple-500 via-blue-500 to-purple-500 rounded-full animate-pulse" style={{ width: '60%' }}></div>
+            </div>
+          </div>
+        </div>
+      )}
+
       <Card className="relative glass rounded-2xl p-6 lg:p-8 max-w-md w-full overflow-hidden animate-fade-in animate-glow">
         {/* Avatar Video */}
         <div
@@ -1274,11 +1293,17 @@ Keep responses conversational, technical, and focused on helping users understan
             playsInline
           />
 
-          {avatarState === "connecting" && (
-            <div className="absolute inset-0 flex items-center justify-center bg-black/30 rounded-xl">
-              <div className="flex items-center gap-2 text-white bg-black/60 px-4 py-2 rounded-lg">
-                <Loader2 className="h-6 w-6 animate-spin" />
-                <span className="text-sm font-medium">Connecting...</span>
+          {(avatarState === "connecting" || isInitializing) && (
+            <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-purple-900/40 via-blue-900/40 to-purple-900/40 backdrop-blur-sm rounded-xl z-20">
+              <div className="flex flex-col items-center gap-4 text-white">
+                <div className="relative">
+                  <div className="absolute inset-0 bg-gradient-to-r from-purple-500 via-blue-500 to-purple-500 rounded-full blur-xl opacity-50 animate-pulse"></div>
+                  <Loader2 className="h-12 w-12 animate-spin text-white relative z-10" />
+                </div>
+                <div className="text-center">
+                  <p className="text-base font-semibold mb-1">Starting Avatar Session</p>
+                  <p className="text-sm text-gray-300">Connecting to AI assistant...</p>
+                </div>
               </div>
             </div>
           )}
@@ -1383,12 +1408,21 @@ Keep responses conversational, technical, and focused on helping users understan
           </div>
         )}
 
-        {/* Contract Signing Link */}
-        {isCreatingSigningLink && (
-          <div className="bg-blue-500/20 border border-blue-500/30 rounded-lg p-3 mb-3 animate-fade-in">
-            <div className="flex items-center gap-2 text-blue-300">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <p className="text-sm">Creating your signing link...</p>
+        {/* Contract Signing Link - Enhanced Loading State */}
+        {isCreatingSigningLink && !showContractDialog && (
+          <div className="bg-gradient-to-r from-blue-500/20 via-purple-500/20 to-blue-500/20 border border-blue-500/40 rounded-lg p-4 mb-3 animate-fade-in shadow-lg shadow-blue-500/20">
+            <div className="flex items-center gap-3">
+              <div className="relative">
+                <div className="absolute inset-0 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full blur-md opacity-50 animate-pulse"></div>
+                <Loader2 className="h-5 w-5 animate-spin text-blue-400 relative z-10" />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-blue-300 mb-1">Creating Contract Signing Link</p>
+                <p className="text-xs text-blue-200/80">Please wait while we generate your secure signing link...</p>
+              </div>
+            </div>
+            <div className="mt-3 w-full bg-blue-900/30 rounded-full h-1.5 overflow-hidden">
+              <div className="h-full bg-gradient-to-r from-blue-500 via-purple-500 to-blue-500 rounded-full animate-pulse" style={{ width: '65%' }}></div>
             </div>
           </div>
         )}
@@ -1427,8 +1461,38 @@ Keep responses conversational, technical, and focused on helping users understan
       </Card>
 
       {/* Contract Signing Dialog */}
-      <Dialog open={showContractDialog} onOpenChange={setShowContractDialog}>
-        <DialogContent className="sm:max-w-[425px]">
+      <Dialog 
+        open={showContractDialog} 
+        onOpenChange={(open) => {
+          // Prevent closing dialog while creating contract
+          if (!isCreatingSigningLink) {
+            setShowContractDialog(open);
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-[425px] relative">
+          {/* Loading overlay for contract creation */}
+          {isCreatingSigningLink && (
+            <div 
+              className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm rounded-lg"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex flex-col items-center gap-4 p-6">
+                <div className="relative">
+                  <div className="absolute inset-0 bg-gradient-to-r from-blue-500 via-purple-500 to-blue-500 rounded-full blur-xl opacity-50 animate-pulse"></div>
+                  <Loader2 className="h-12 w-12 animate-spin text-white relative z-10" />
+                </div>
+                <div className="text-center">
+                  <p className="text-lg font-semibold text-white mb-1">Creating Contract</p>
+                  <p className="text-sm text-gray-300">Generating your signing link...</p>
+                </div>
+                <div className="w-48 bg-gray-700/30 rounded-full h-1.5 overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-blue-500 via-purple-500 to-blue-500 rounded-full animate-pulse" style={{ width: '70%' }}></div>
+                </div>
+              </div>
+            </div>
+          )}
+
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <FileText className="h-5 w-5 text-blue-500" />
@@ -1438,7 +1502,7 @@ Keep responses conversational, technical, and focused on helping users understan
               Please provide your email address and full name to generate your contract signing link.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4 py-4">
+          <div className={`grid gap-4 py-4 ${isCreatingSigningLink ? 'opacity-50 pointer-events-none' : ''}`}>
             <div className="grid gap-2">
               <Label htmlFor="contract-email" className="flex items-center gap-2">
                 <Mail className="h-4 w-4" />
@@ -1498,12 +1562,15 @@ Keep responses conversational, technical, and focused on helping users understan
             <Button
               variant="outline"
               onClick={() => {
-                setShowContractDialog(false);
-                setContractEmail("");
-                setContractName("");
-                setSigningLinkError(null);
-                setPendingFunctionCallId(null);
+                if (!isCreatingSigningLink) {
+                  setShowContractDialog(false);
+                  setContractEmail("");
+                  setContractName("");
+                  setSigningLinkError(null);
+                  setPendingFunctionCallId(null);
+                }
               }}
+              disabled={isCreatingSigningLink}
             >
               Cancel
             </Button>
@@ -1514,15 +1581,21 @@ Keep responses conversational, technical, and focused on helping users understan
                 !contractName.trim() ||
                 isCreatingSigningLink
               }
-              className="bg-blue-600 hover:bg-blue-700"
+              className="bg-gradient-to-r from-blue-600 via-purple-600 to-blue-600 hover:from-blue-700 hover:via-purple-700 hover:to-blue-700 text-white font-semibold shadow-lg hover:shadow-xl hover:shadow-blue-500/50 transition-all duration-300"
             >
               {isCreatingSigningLink ? (
                 <>
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Creating...
+                  <div className="relative mr-2">
+                    <div className="absolute inset-0 bg-white/30 rounded-full blur-sm"></div>
+                    <Loader2 className="h-4 w-4 animate-spin relative z-10" />
+                  </div>
+                  Creating Contract...
                 </>
               ) : (
-                "Create Signing Link"
+                <>
+                  <FileText className="h-4 w-4 mr-2" />
+                  Create Signing Link
+                </>
               )}
             </Button>
           </DialogFooter>
