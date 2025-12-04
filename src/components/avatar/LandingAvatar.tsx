@@ -87,6 +87,13 @@ export default function LandingAvatar() {
 
   const hasProcessedContractRequestRef = useRef(false);
   const signingLinkRef = useRef<string | null>(null);
+  const documentIdRef = useRef<string | null>(null);
+  
+  // Conversation tracking refs
+  const callIdRef = useRef<string | null>(null);
+  const callStartTimeRef = useRef<Date | null>(null);
+  const fullTranscriptRef = useRef<string>("");
+  const conversationSavedRef = useRef<boolean>(false);
   const SIMLI_FACE_ID =
     process.env.NEXT_PUBLIC_SIMLI_FACE_ID ||
     "afdb6a3e-3939-40aa-92df-01604c23101c";
@@ -353,8 +360,17 @@ export default function LandingAvatar() {
       }
 
       // Set up Vapi event handlers
-      vapiRef.current.on("call-start", async () => {
+      vapiRef.current.on("call-start", async (data: any) => {
         setAvatarState("connected");
+        
+        // Initialize conversation tracking
+        const vapiCallId = data?.callId || data?.call?.id || data?.id || 
+                          (vapiRef.current as any)?.callId || 
+                          `call_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        callIdRef.current = vapiCallId;
+        callStartTimeRef.current = new Date();
+        fullTranscriptRef.current = "";
+        conversationSavedRef.current = false;
 
         if (audioRef.current) {
           audioRef.current.muted = false;
@@ -419,8 +435,53 @@ export default function LandingAvatar() {
         }, 100);
       });
 
-      vapiRef.current.on("call-end", () => {
+      vapiRef.current.on("call-end", async () => {
         setAvatarState("idle");
+        
+        // Save conversation when call ends
+        if (callIdRef.current && callStartTimeRef.current && !conversationSavedRef.current) {
+          const endTime = new Date();
+          const duration = Math.floor(
+            (endTime.getTime() - callStartTimeRef.current.getTime()) / 1000
+          );
+
+          const conversationData = {
+            callId: callIdRef.current,
+            startTime: callStartTimeRef.current.toISOString(),
+            endTime: endTime.toISOString(),
+            duration,
+            transcript: fullTranscriptRef.current || transcript || "",
+            messages: [],
+            metadata: {
+              assistantId: VAPI_ASSISTANT_ID,
+              vapiCallId: callIdRef.current,
+            },
+          };
+
+          try {
+            const response = await apiRequest("POST", "/api/conversations/save", conversationData);
+            const data = await response.json();
+
+            if (data.success) {
+              conversationSavedRef.current = true;
+              console.log("Conversation saved successfully");
+              // Retry pending saves after successful save
+              await retryPendingSaves();
+            } else {
+              // Save to localStorage for retry
+              if (data.retryData) {
+                saveToLocalStorage("pending_conversations", data.retryData);
+              } else {
+                saveToLocalStorage("pending_conversations", conversationData);
+              }
+              console.warn("Failed to save conversation, stored for retry");
+            }
+          } catch (error) {
+            console.error("Error saving conversation:", error);
+            // Save to localStorage for retry
+            saveToLocalStorage("pending_conversations", conversationData);
+          }
+        }
       });
 
       vapiRef.current.on("speech-start", () => {
@@ -495,14 +556,27 @@ export default function LandingAvatar() {
                 apiRequest("POST", "/api/boldsign/create-signing-link", {
                   email,
                   name,
+                  callId: callIdRef.current,
+                  sessionId: callIdRef.current,
                 })
                   .then((res) => res.json())
-                  .then((data) => {
+                  .then(async (data) => {
                     if (data.success && data.signingLink) {
                       setSigningLink(data.signingLink);
                       signingLinkRef.current = data.signingLink;
+                      if (data.documentId) {
+                        documentIdRef.current = data.documentId;
+                      }
                       setHasProcessedContractRequest(true);
                       hasProcessedContractRequestRef.current = true;
+                      
+                      // If DB save failed, store for retry
+                      if (data.dbSaveFailed && data.retryData) {
+                        saveToLocalStorage("pending_contracts", data.retryData);
+                      }
+                      
+                      // Retry any pending saves
+                      await retryPendingSaves();
 
                       if ((window as any).__contractDialogTimeout) {
                         clearTimeout((window as any).__contractDialogTimeout);
@@ -541,6 +615,14 @@ export default function LandingAvatar() {
             data.role === "assistant" || data.role === "bot"
               ? "avatar"
               : "user";
+
+          // Append to full transcript
+          const transcriptText = data.transcript.trim();
+          if (fullTranscriptRef.current) {
+            fullTranscriptRef.current += `\n\n${speaker === "avatar" ? "Assistant" : "User"}: ${transcriptText}`;
+          } else {
+            fullTranscriptRef.current = `${speaker === "avatar" ? "Assistant" : "User"}: ${transcriptText}`;
+          }
 
           if (speaker === "avatar") {
             setTranscript(data.transcript);
@@ -689,6 +771,8 @@ export default function LandingAvatar() {
                   {
                     email,
                     name,
+                    callId: callIdRef.current,
+                    sessionId: callIdRef.current,
                   }
                 );
 
@@ -697,8 +781,19 @@ export default function LandingAvatar() {
                 if (data.success && data.signingLink) {
                   setSigningLink(data.signingLink);
                   signingLinkRef.current = data.signingLink;
+                  if (data.documentId) {
+                    documentIdRef.current = data.documentId;
+                  }
                   setHasProcessedContractRequest(true);
                   hasProcessedContractRequestRef.current = true;
+                  
+                  // If DB save failed, store for retry
+                  if (data.dbSaveFailed && data.retryData) {
+                    saveToLocalStorage("pending_contracts", data.retryData);
+                  }
+                  
+                  // Retry any pending saves
+                  await retryPendingSaves();
 
                   if ((window as any).__contractDialogTimeout) {
                     clearTimeout((window as any).__contractDialogTimeout);
@@ -940,6 +1035,51 @@ Keep responses conversational, technical, and focused on helping users understan
         audioRef.current.pause();
       }
 
+      // Save conversation before clearing state
+      if (callIdRef.current && callStartTimeRef.current && !conversationSavedRef.current) {
+        const endTime = new Date();
+        const duration = Math.floor(
+          (endTime.getTime() - callStartTimeRef.current.getTime()) / 1000
+        );
+
+        const conversationData = {
+          callId: callIdRef.current,
+          startTime: callStartTimeRef.current.toISOString(),
+          endTime: endTime.toISOString(),
+          duration,
+          transcript: fullTranscriptRef.current || transcript || "",
+          messages: [],
+          metadata: {
+            assistantId: VAPI_ASSISTANT_ID,
+            vapiCallId: callIdRef.current,
+          },
+        };
+
+        try {
+          const response = await apiRequest("POST", "/api/conversations/save", conversationData);
+          const data = await response.json();
+
+          if (data.success) {
+            conversationSavedRef.current = true;
+            console.log("Conversation saved successfully");
+            // Retry pending saves after successful save
+            await retryPendingSaves();
+          } else {
+            // Save to localStorage for retry
+            if (data.retryData) {
+              saveToLocalStorage("pending_conversations", data.retryData);
+            } else {
+              saveToLocalStorage("pending_conversations", conversationData);
+            }
+            console.warn("Failed to save conversation, stored for retry");
+          }
+        } catch (error) {
+          console.error("Error saving conversation:", error);
+          // Save to localStorage for retry
+          saveToLocalStorage("pending_conversations", conversationData);
+        }
+      }
+
       setAvatarState("idle");
       setTranscript("");
       setError(null);
@@ -953,6 +1093,13 @@ Keep responses conversational, technical, and focused on helping users understan
       setContractEmail("");
       setContractName("");
       setPendingFunctionCallId(null);
+      
+      // Clear conversation tracking
+      callIdRef.current = null;
+      callStartTimeRef.current = null;
+      fullTranscriptRef.current = "";
+      conversationSavedRef.current = false;
+      
       isStoppingRef.current = false;
     } catch (stopError) {
       console.error("Error stopping avatar:", stopError);
@@ -961,6 +1108,146 @@ Keep responses conversational, technical, and focused on helping users understan
       isStoppingRef.current = false;
     }
   }, []);
+
+  // Helper function to save pending data to localStorage
+  const saveToLocalStorage = useCallback((key: string, data: any) => {
+    try {
+      const pending = JSON.parse(localStorage.getItem(key) || "[]");
+      pending.push({
+        ...data,
+        timestamp: new Date().toISOString(),
+        retryCount: 0,
+      });
+      localStorage.setItem(key, JSON.stringify(pending));
+    } catch (error) {
+      console.error("Failed to save to localStorage:", error);
+    }
+  }, []);
+
+  // Helper function to retry pending saves
+  const retryPendingSaves = useCallback(async () => {
+    try {
+      // Retry pending conversations
+      const pendingConversations = JSON.parse(
+        localStorage.getItem("pending_conversations") || "[]"
+      );
+      
+      if (pendingConversations.length > 0) {
+        const successful: number[] = [];
+        
+        for (let i = 0; i < pendingConversations.length; i++) {
+          const conv = pendingConversations[i];
+          if (conv.retryCount >= 5) continue; // Max 5 retries
+          
+          try {
+            const response = await apiRequest("POST", "/api/conversations/save", {
+              callId: conv.callId,
+              startTime: conv.startTime,
+              endTime: conv.endTime,
+              duration: conv.duration,
+              transcript: conv.transcript,
+              messages: conv.messages,
+              metadata: conv.metadata,
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+              successful.push(i);
+            } else if (data.retryData) {
+              // Update retry count
+              pendingConversations[i].retryCount = (conv.retryCount || 0) + 1;
+            }
+          } catch (error) {
+            // Increment retry count
+            pendingConversations[i].retryCount = (conv.retryCount || 0) + 1;
+          }
+        }
+        
+        // Remove successful saves
+        if (successful.length > 0) {
+          const remaining = pendingConversations.filter(
+            (_: any, i: number) => !successful.includes(i)
+          );
+          localStorage.setItem("pending_conversations", JSON.stringify(remaining));
+        }
+      }
+
+      // Retry pending contracts
+      const pendingContracts = JSON.parse(
+        localStorage.getItem("pending_contracts") || "[]"
+      );
+      
+      if (pendingContracts.length > 0) {
+        const successful: number[] = [];
+        
+        for (let i = 0; i < pendingContracts.length; i++) {
+          const contract = pendingContracts[i];
+          if (contract.retryCount >= 5) continue;
+          
+          try {
+            const response = await apiRequest("POST", "/api/boldsign/create-signing-link", {
+              email: contract.email,
+              name: contract.name,
+              callId: contract.callId,
+              sessionId: contract.sessionId,
+            });
+            
+            const data = await response.json();
+            if (data.success && !data.dbSaveFailed) {
+              successful.push(i);
+            }
+          } catch (error) {
+            pendingContracts[i].retryCount = (contract.retryCount || 0) + 1;
+          }
+        }
+        
+        if (successful.length > 0) {
+          const remaining = pendingContracts.filter(
+            (_: any, i: number) => !successful.includes(i)
+          );
+          localStorage.setItem("pending_contracts", JSON.stringify(remaining));
+        }
+      }
+
+      // Retry pending contract status updates
+      const pendingStatusUpdates = JSON.parse(
+        localStorage.getItem("pending_contract_updates") || "[]"
+      );
+      
+      if (pendingStatusUpdates.length > 0) {
+        const successful: number[] = [];
+        
+        for (let i = 0; i < pendingStatusUpdates.length; i++) {
+          const update = pendingStatusUpdates[i];
+          if (update.retryCount >= 5) continue;
+          
+          try {
+            const response = await apiRequest("POST", "/api/boldsign/update-signing-status", {
+              documentId: update.documentId,
+              status: update.status,
+            });
+            
+            const data = await response.json();
+            if (data.success) {
+              successful.push(i);
+            }
+          } catch (error) {
+            pendingStatusUpdates[i].retryCount = (update.retryCount || 0) + 1;
+          }
+        }
+        
+        if (successful.length > 0) {
+          const remaining = pendingStatusUpdates.filter(
+            (_: any, i: number) => !successful.includes(i)
+          );
+          localStorage.setItem("pending_contract_updates", JSON.stringify(remaining));
+        }
+      }
+    } catch (error) {
+      console.error("Error retrying pending saves:", error);
+    }
+  }, []);
+
 
   const toggleMute = useCallback(() => {
     setMuted(!muted);
@@ -1012,6 +1299,8 @@ Keep responses conversational, technical, and focused on helping users understan
         {
           email: email,
           name: name,
+          callId: callIdRef.current,
+          sessionId: callIdRef.current,
         }
       );
 
@@ -1032,8 +1321,19 @@ Keep responses conversational, technical, and focused on helping users understan
         const signingLinkUrl = data.signingLink;
         setSigningLink(signingLinkUrl);
         signingLinkRef.current = signingLinkUrl;
+        if (data.documentId) {
+          documentIdRef.current = data.documentId;
+        }
         setHasProcessedContractRequest(true);
         hasProcessedContractRequestRef.current = true;
+        
+        // If DB save failed, store for retry
+        if (data.dbSaveFailed && data.retryData) {
+          saveToLocalStorage("pending_contracts", data.retryData);
+        }
+        
+        // Retry any pending saves
+        await retryPendingSaves();
 
         if ((window as any).__contractDialogTimeout) {
           clearTimeout((window as any).__contractDialogTimeout);
@@ -1103,7 +1403,7 @@ Keep responses conversational, technical, and focused on helping users understan
       setIsCreatingSigningLink(false);
       setPendingFunctionCallId(null);
     }
-  }, [contractEmail, contractName, pendingFunctionCallId]);
+  }, [contractEmail, contractName, pendingFunctionCallId, saveToLocalStorage, retryPendingSaves]);
 
   const preInitializeServices = useCallback(async () => {
     if (isPreInitialized || !VAPI_API_KEY || !SIMLI_API_KEY) return;
@@ -1141,6 +1441,55 @@ Keep responses conversational, technical, and focused on helping users understan
 
   useEffect(() => {
     setIsVisible(true);
+    
+    // Retry pending saves on component mount
+    const retryOnMount = async () => {
+      try {
+        // Retry pending conversations
+        const pendingConversations = JSON.parse(
+          localStorage.getItem("pending_conversations") || "[]"
+        );
+        
+        if (pendingConversations.length > 0) {
+          const successful: number[] = [];
+          
+          for (let i = 0; i < pendingConversations.length; i++) {
+            const conv = pendingConversations[i];
+            if (conv.retryCount >= 5) continue;
+            
+            try {
+              const response = await apiRequest("POST", "/api/conversations/save", {
+                callId: conv.callId,
+                startTime: conv.startTime,
+                endTime: conv.endTime,
+                duration: conv.duration,
+                transcript: conv.transcript,
+                messages: conv.messages,
+                metadata: conv.metadata,
+              });
+              
+              const data = await response.json();
+              if (data.success) {
+                successful.push(i);
+              }
+            } catch (error) {
+              // Ignore errors on mount retry
+            }
+          }
+          
+          if (successful.length > 0) {
+            const remaining = pendingConversations.filter(
+              (_: any, i: number) => !successful.includes(i)
+            );
+            localStorage.setItem("pending_conversations", JSON.stringify(remaining));
+          }
+        }
+      } catch (error) {
+        // Ignore errors on mount
+      }
+    };
+    
+    retryOnMount();
   }, []);
 
   useEffect(() => {
@@ -1161,7 +1510,7 @@ Keep responses conversational, technical, and focused on helping users understan
     const channelName = "contract-signing-channel";
     const channel = new BroadcastChannelAPI(channelName);
 
-    channel.onmessage = (event: MessageEvent) => {
+    channel.onmessage = async (event: MessageEvent) => {
       if (
         event.data &&
         event.data.type === "CONTRACT_SIGNED" &&
@@ -1171,6 +1520,36 @@ Keep responses conversational, technical, and focused on helping users understan
         signingLinkRef.current = null;
         setSigningLinkError(null);
         setContractSignedSuccess(true);
+
+        // Update contract status in database
+        const documentId = event.data.documentId || documentIdRef.current;
+        if (documentId) {
+          try {
+            const response = await apiRequest("POST", "/api/boldsign/update-signing-status", {
+              documentId,
+              status: "signed",
+            });
+            const data = await response.json();
+            
+            if (data.success) {
+              console.log("Contract status updated to signed");
+              // Retry pending saves after successful update
+              await retryPendingSaves();
+            } else if (data.retryData) {
+              // Save to localStorage for retry
+              saveToLocalStorage("pending_contract_updates", data.retryData);
+            }
+          } catch (error) {
+            console.error("Error updating contract status:", error);
+            // Save to localStorage for retry
+            if (documentId) {
+              saveToLocalStorage("pending_contract_updates", {
+                documentId,
+                status: "signed",
+              });
+            }
+          }
+        }
 
         setTimeout(() => {
           setContractSignedSuccess(false);
@@ -1201,9 +1580,14 @@ Keep responses conversational, technical, and focused on helping users understan
         const channelName = "contract-signing-channel";
         const channel = new BroadcastChannelAPI(channelName);
 
+        // Try to get documentId from URL or localStorage
+        const urlParams = new URLSearchParams(window.location.search);
+        const docId = urlParams.get("documentId") || documentIdRef.current || null;
+
         channel.postMessage({
           type: "CONTRACT_SIGNED",
           success: true,
+          documentId: docId,
           timestamp: new Date().toISOString(),
         });
 
