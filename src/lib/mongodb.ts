@@ -1,16 +1,5 @@
 import { MongoClient, Db } from 'mongodb';
 
-if (!process.env.MONGODB_URI) {
-  throw new Error('Please add your Mongo URI to .env.local');
-}
-
-if (!process.env.DB_NAME) {
-  throw new Error('Please add your DB_NAME to .env.local');
-}
-
-const uri: string = process.env.MONGODB_URI;
-const dbName: string = process.env.DB_NAME;
-
 let client: MongoClient | null = null;
 let clientPromise: Promise<MongoClient> | null = null;
 
@@ -18,18 +7,56 @@ declare global {
   var _mongoClientPromise: Promise<MongoClient> | undefined;
 }
 
-if (process.env.NODE_ENV === 'development') {
-  // In development mode, use a global variable so that the value
-  // is preserved across module reloads caused by HMR (Hot Module Replacement).
-  if (!global._mongoClientPromise) {
-    client = new MongoClient(uri);
-    global._mongoClientPromise = client.connect();
+/**
+ * Get MongoDB URI from environment variables
+ * Throws error only when actually needed (lazy evaluation)
+ */
+function getMongoUri(): string {
+  const uri = process.env.MONGODB_URI;
+  if (!uri) {
+    throw new Error('Please add your Mongo URI to .env.local');
   }
-  clientPromise = global._mongoClientPromise;
-} else {
-  // In production mode, it's best to not use a global variable.
-  client = new MongoClient(uri);
-  clientPromise = client.connect();
+  return uri;
+}
+
+/**
+ * Get database name from environment variables
+ * Throws error only when actually needed (lazy evaluation)
+ */
+function getDbName(): string {
+  const dbName = process.env.DB_NAME;
+  if (!dbName) {
+    throw new Error('Please add your DB_NAME to .env.local');
+  }
+  return dbName;
+}
+
+/**
+ * Get or create MongoDB client promise
+ * Lazy initialization - only creates client when needed
+ */
+function getClientPromise(): Promise<MongoClient> {
+  if (clientPromise) {
+    return clientPromise;
+  }
+
+  const uri = getMongoUri();
+
+  if (process.env.NODE_ENV === 'development') {
+    // In development mode, use a global variable so that the value
+    // is preserved across module reloads caused by HMR (Hot Module Replacement).
+    if (!global._mongoClientPromise) {
+      client = new MongoClient(uri);
+      global._mongoClientPromise = client.connect();
+    }
+    clientPromise = global._mongoClientPromise;
+  } else {
+    // In production mode, it's best to not use a global variable.
+    client = new MongoClient(uri);
+    clientPromise = client.connect();
+  }
+
+  return clientPromise;
 }
 
 /**
@@ -37,11 +64,8 @@ if (process.env.NODE_ENV === 'development') {
  * @returns Promise<Db> - MongoDB database instance
  */
 export async function getDatabase(): Promise<Db> {
-  if (!clientPromise) {
-    client = new MongoClient(uri);
-    clientPromise = client.connect();
-  }
-  const clientInstance = await clientPromise;
+  const clientInstance = await getClientPromise();
+  const dbName = getDbName();
   return clientInstance.db(dbName);
 }
 
@@ -50,12 +74,9 @@ export async function getDatabase(): Promise<Db> {
  * @returns Promise<MongoClient> - MongoDB client instance
  */
 export async function getClient(): Promise<MongoClient> {
-  if (!clientPromise) {
-    client = new MongoClient(uri);
-    clientPromise = client.connect();
-  }
-  return clientPromise;
+  return getClientPromise();
 }
 
-export default clientPromise;
+// Export clientPromise for backward compatibility (lazy initialization)
+export default getClientPromise();
 
